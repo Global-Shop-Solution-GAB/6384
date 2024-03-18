@@ -1,0 +1,231 @@
+﻿Program.Sub.Preflight.Start
+V.Global.sError.Declare(String)
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Arturo Almaguer
+'Date: 12 June 2021
+'Customer: Miller Weldmaster Corp, quote 12688
+'Program is divided into two parts:
+	'Part 1: There is a 'Project' field in their CAD software properties that they would like to use as a filter for their data. The user will mark this field when they don't want the part to appear in 'BOM Compare'. If there is anything written in this field, don't load this part into 'BOM Compare', which basically means to not include this part in BOM. Load part if nothing is written in the field. 
+	'Part 2: CAD Software Autodesk Vault has a field named 'Title'. This field is currently mapped to go into 'BOM Comments' property in GSS but it is not working properly, and they would like for this relation to work as stated. 
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+F.Intrinsic.Control.Try
+
+	F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+		
+		F.Intrinsic.Control.Case(50310)
+		'50310 BOM Compare Populate Data hook
+			'If statement added so program doesn't run when user exports a BOM in BOM Compare settings
+			F.Intrinsic.Control.If(V.Passed.Main-txtLoadBOMForExport,=,"")
+				F.Intrinsic.Control.CallSub(ExcludePart)
+				F.Intrinsic.Control.CallSub(savepreloadbdf)
+			F.Intrinsic.Control.EndIf
+			
+		F.Intrinsic.Control.Case(16351)
+		'16351 BMS0020 Create Part hook
+			F.Intrinsic.Control.CallSub(ImportComment)
+			
+	F.Intrinsic.Control.EndSelect
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.Main.End
+Program.Sub.ExcludePart.Start
+'This subroutine was taken from a free of charge script made for this customer by Trent Maynard
+'Made a change to BOM compare that will not let you bring in parts greater than 20 characters. This will find parts greater than 20 characters, move the part number to the description field and make the part number **PART-TOO-LONG
+
+F.Intrinsic.Control.Try
+
+	V.Local.bInstr.Declare
+	V.Local.bOnFirst.Declare
+	V.Local.bSource.Declare
+	V.Local.iTitles.Declare
+	V.Local.iFor.Declare
+	V.Local.iFor2.Declare
+	V.Local.iLen.Declare
+	V.Local.iRows.Declare
+	V.Local.sChild.Declare
+	V.Local.sGSSPart.Declare
+	V.Local.sParent.Declare
+	V.Local.sRet.Declare
+	V.Local.sRow.Declare
+	V.Local.sSel.Declare
+	V.Local.sSQL.Declare
+	V.Local.sTitleArray.Declare
+	V.Local.sTitles.Declare
+	
+	'Connect
+	F.Intrinsic.UI.InvokeWaitDialog("Loading BDF","BOM Compare - ARC 6384 - Ver: 042220200046")
+	
+	'Close dtPreload if it exists
+	F.Intrinsic.Control.If(V.DataTable.dtPreload.Exists,=,True)
+		F.Data.DataTable.DeleteRow("dtPreload")
+		F.Data.DataTable.Close("dtPreload")
+	F.Intrinsic.Control.EndIf
+	
+	'Load the BDF to dtPreLoad
+	F.Intrinsic.BDF.Load("bdfPreload","Main-PrePopulate-bdf")
+	
+	'Load the BDF Titles
+	F.Intrinsic.BDF.ReadColumnTitle("bdfPreload",V.Local.sTitles)
+	
+	'Split the titles and loop through them to create columns in dtPreload
+	F.Intrinsic.String.Split(V.Local.sTitles,"*!*",V.Local.sTitleArray)
+	F.Data.DataTable.Create("dtPreload",True)
+	V.Local.iTitles.Set(V.Local.sTitleArray.UBound)
+	F.Intrinsic.Control.For(V.Local.iFor,0,V.Local.iTitles,1)
+		F.Intrinsic.UI.ChangeWaitStatus("Creating Data Table",V.Local.iFor,0,V.Local.iTitles)
+		F.Data.DataTable.AddColumn("dtPreload",V.Local.sTitleArray(V.Local.iFor).UCase,"String")
+	F.Intrinsic.Control.Next(V.Local.iFor)
+	
+	'Load the bdf rows into dtPreload
+	F.Intrinsic.BDF.ReadRowCount("bdfPreload",V.Local.iRows)
+	F.Intrinsic.Math.Sub(V.Local.iRows,1,V.Local.iRows)
+	F.Intrinsic.Control.For(V.Local.iFor,0,V.Local.iRows,1)
+		F.Intrinsic.UI.ChangeWaitStatus("Loading BDF to Data Table",V.Local.iFor,0,V.Local.iRows)
+		F.Intrinsic.BDF.ReadRow("bdfPreload",V.Local.iFor,V.Local.sRow)
+		F.Intrinsic.String.Split(V.Local.sRow,"|~|",V.Local.sRow)
+		V.Local.bOnFirst.Set(False)
+		F.Intrinsic.Control.For(V.Local.iFor2,0,V.Local.iTitles,1)
+			F.Intrinsic.Control.If(V.Local.bOnFirst,=,False)
+				F.Data.DataTable.AddRow("dtPreload",V.Local.sTitleArray(V.Local.iFor2),V.Local.sRow(V.Local.iFor2))
+			F.Intrinsic.Control.Else
+				F.Data.DataTable.SetValue("dtPreload",V.Local.iFor,V.Local.sTitleArray(V.Local.iFor2),V.Local.sRow(V.Local.iFor2))
+			F.Intrinsic.Control.EndIf
+			V.Local.bOnFirst.Set(True)
+		F.Intrinsic.Control.Next(V.Local.iFor2)
+	F.Intrinsic.Control.Next(V.Local.iFor)
+	
+	'Loop through dtPreLoad
+	F.Intrinsic.Control.For(V.Local.iFor,0,V.DataTable.dtPreload.RowCount--,1)
+		'F.Intrinsic.String.GSSPartString(V.DataTable.dtPreload(V.Local.iFor).DISPLAYPART!FieldValTrim,V.DataTable.dtPreload(V.Local.iFor).Revision!FieldValTrim,V.Local.sGSSPart)
+		v.Local.sGSSPart.Set(V.DataTable.dtPreload(V.Local.iFor).DISPLAYPART!FieldValTrim)
+	
+		F.Intrinsic.String.Trim(V.Local.sGSSPart,V.Local.sGSSPart)
+		F.Intrinsic.Control.If(V.Local.sGSSPart.Length,>,17)
+			f.Data.DataTable.SetValue("dtPreload",v.Local.iFor,"DISPLAYPART","PART-TOO-LONG","PARTNO","PART-TOO-LONG","DESCRIPTION",V.DataTable.dtPreload(V.Local.iFor).DISPLAYPART!FIELDVALTRIM,"QUANTITY",0)
+			'F.Data.DataTable.DeleteRow("dtPreload",V.Local.iFor)
+			'f.Data.DataTable.AddRow("dtPreload")
+			'**PART-TOO-LONG
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Next(V.Local.iFor)
+		
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.ExcludePart.End
+Program.Sub.ImportComment.Start
+'In the scenario that the user clicks on 'Create Parts' button on BOM, this sub takes everything written in 'BOM Comments' field and carry it over to the 'Extra Description' field for this newly generated part in inventory
+
+F.Intrinsic.Control.Try
+
+	V.Local.sGSSPartString.Declare(String)
+	V.Local.sPart.Declare(String)
+	V.Local.sRev.Declare(String)
+	V.Local.sSQL.Declare(String)
+	V.Local.iCounter.Declare(Long)
+	V.Local.sText.Declare(String)
+	
+	'V.Passed.000001 = BOM Parent, V.Passed.000093 = Parent Rev
+	V.Local.sPart.Set(V.Passed.000001)
+	V.Local.sRev.Set(V.Passed.000093)
+	
+	F.Intrinsic.String.GSSPartString(V.Local.sPart, V.Local.sRev, V.Local.sGSSPartString)   
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Intrinsic.String.Build("select RTRIM(A.PARENT) PARENT, RTRIM(A.PARENT_SEQ) PARENT_SEQ, RTRIM(A.TEXT) TEXT, RTRIM(B.PART) PART from V_BOM_NOTES A LEFT JOIN V_BOM_MSTR B ON A.PARENT = B.PARENT and A.PARENT_SEQ = B.SEQUENCE_BOM where A.PARENT = '{0}' order by A.PARENT_SEQ", V.Local.sGSSPartString, V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtParts", "Con", V.Local.sSQL, True)
+	
+	'Setting parent part to index 0 in Part column
+	F.Data.DataTable.SetValue("dtParts", 0, "PART", V.Local.sGSSPartString)
+	
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtParts.RowCount--, 1) 
+		
+		'Setting comment variable and replacing character that might break the code if it appears in text
+		V.Local.sText.Set(V.DataTable.dtParts(V.Local.iCounter).TEXT!FieldValTrim)
+		F.Intrinsic.String.Replace(V.Local.sText, "'", "''", V.Local.sText)
+		
+		'Checking if part has already something written in extra description field
+		F.Intrinsic.String.Build("select * from V_INV_EXTRA_TEXT where PART = '{0}';", V.DataTable.dtParts(V.Local.iCounter).PART!FieldValTrim, V.Local.sSQL)
+		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.sSQL)
+		
+		F.Intrinsic.Control.If(V.Local.sSQL, =, "")
+		'If it is blank, it means that part doesn't have an extra description
+			F.Intrinsic.String.Build("insert into V_INV_EXTRA_TEXT (PART, TEXT) values('{0}','{1}');", V.DataTable.dtParts(V.Local.iCounter).PART!FieldValTrim, V.Local.sText, V.Local.sSQL)
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+		F.Intrinsic.Control.EndIf
+
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	F.ODBC.Connection!Con.Close
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.ImportComment.End
+Program.Sub.CatchError.Start
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.SubroutineCalledFrom, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError) 
+F.Intrinsic.UI.Msgbox(V.Global.sError)
+F.Intrinsic.Control.End()
+Program.Sub.CatchError.End
+Program.Sub.savePreloadBDF.Start
+'This subroutine clones the BDF in BOM Compare screen and filters out the records that have something written in Project field
+'CAD Software Autodesk Vault has a field named 'Project' and it was the one determined by the customer to be used to filter their data
+
+F.Intrinsic.Control.Try
+
+	V.Local.iFor.Declare
+	V.Local.sRow.Declare
+	V.Local.sProjectField.Declare(String)
+	V.Local.sParent.Declare(String)
+	
+	'Clone the bdf
+	F.Intrinsic.BDF.Clone("bdfPreload","bdfClone")
+	
+	'Redim sRow
+	V.Local.sRow.Redim(0,0)
+	V.Local.sRow.Set("")
+	
+	'Loop through dtPreLoad
+	F.Intrinsic.Control.For(V.Local.iFor,0,V.DataTable.dtPreload.RowCount--,1)
+		'Post to the bdfClone
+		V.Local.sProjectField.Set(V.DataTable.dtPreload(V.Local.iFor).PROJECT!FieldVal)
+		V.Local.sParent.Set(V.DataTable.dtPreload(V.Local.iFor).LEVEL!FieldVal)
+		
+		F.Intrinsic.Control.If(V.Local.sProjectField, =, "", "OR", V.Local.sParent, =, "0")
+		
+			F.Intrinsic.String.Replace(V.DataTable.dtPreload(V.Local.iFor).FullRow,"*!*","|~|",V.Local.sRow)
+			F.Intrinsic.BDF.WriteRow("bdfClone",V.Local.sRow)
+	
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Next(V.Local.iFor)
+	
+	F.Intrinsic.BDF.Save("bdfClone","Main-PrePopulate-bdf")
+	F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.savePreloadBDF.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$apadilla$}$20210729123848680$}$Lag9STqBJOmNXSbd5+msRcBWPGz0aFqSGjpgCwFu86D0S3K3g2GP76l2+XSHivb26KMRNeqneeG1VJmAb34f8Q==
+Program.Sub.Comments.End
